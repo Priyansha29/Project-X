@@ -141,7 +141,7 @@ This repository is built with a paired-commit workflow — think of every PR as
 two people shipping. Changes land on feature branches and go through pull
 requests; commits carry a `Co-authored-by` trailer.
 
-Project maintainers: **Harman** and **Priyansha29**. If you're a student
+Project maintainers: **Priyansha**. If you're a student
 reading this and want to contribute, open an issue first — tell us what you
 want to build and why it earns its place. We'll say yes or tell you you're
 overengineering it.
