@@ -1,126 +1,284 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { LiquidMetal, liquidMetalPresets } from '@paper-design/shaders-react'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Card } from '@/components/ui/card'
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion, useScroll, useTransform } from 'framer-motion'
+import './LiquidMetalHero.css'
 
 const containerVariants = {
   hidden: { opacity: 0 },
   visible: {
     opacity: 1,
-    transition: { delayChildren: 0.2, staggerChildren: 0.15 },
+    transition: { delayChildren: 0.1, staggerChildren: 0.08 },
   },
 }
 
 const itemVariants = {
-  hidden: { opacity: 0, y: 30 },
+  hidden: { opacity: 0, y: 22 },
   visible: { opacity: 1, y: 0 },
 }
 
-const buttonVariants = {
-  hidden: { opacity: 0, scale: 0.9 },
-  visible: { opacity: 1, scale: 1 },
+const REST = { offsetX: 0, offsetY: 0, rotation: 18, scale: 1 }
+
+function themeColors() {
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  return dark
+    ? { back: '#6f5a3a', tint: '#ffedc8' }
+    : { back: '#b49a6a', tint: '#ffffff' }
 }
 
 function LiquidMetalHero({
   id,
-  badge,
+  eyebrow,
   title,
   subtitle,
   primaryCtaLabel,
   secondaryCtaLabel,
   onPrimaryCtaClick,
   onSecondaryCtaClick,
-  features = [],
+  lanes = [],
+  onSelectLane,
 }) {
+  const reduceMotion = useReducedMotion()
+  const sectionRef = useRef(null)
+  const shaderRef = useRef(null)
+  const rafRef = useRef(0)
+  const cur = useRef({ ...REST })
+  const tgt = useRef({ ...REST })
+  const active = useRef(false)
+  const [activeLane, setActiveLane] = useState(null)
+  const [colors, setColors] = useState(() => themeColors())
+  const [compact, setCompact] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches
+  )
+
+  useEffect(() => {
+    const mqDark = window.matchMedia('(prefers-color-scheme: dark)')
+    const mqCompact = window.matchMedia('(max-width: 640px)')
+    const onChangeDark = () => setColors(themeColors())
+    const onChangeCompact = (e) => setCompact(e.matches)
+    mqDark.addEventListener('change', onChangeDark)
+    mqCompact.addEventListener('change', onChangeCompact)
+    return () => {
+      mqDark.removeEventListener('change', onChangeDark)
+      mqCompact.removeEventListener('change', onChangeCompact)
+    }
+  }, [])
+
+  const apply = useCallback(() => {
+    const mount = shaderRef.current?.paperShaderMount
+    if (!mount) return
+    mount.setUniforms({
+      u_offsetX: cur.current.offsetX,
+      u_offsetY: cur.current.offsetY,
+      u_rotation: cur.current.rotation,
+      u_scale: cur.current.scale,
+    })
+  }, [])
+
+  const rafTick = useRef(() => {})
+
+  const runFrame = useCallback(() => {
+    const k = 0.06
+    const { offsetX: tx, offsetY: ty, rotation: tr, scale: ts } = tgt.current
+    const c = cur.current
+    c.offsetX += (tx - c.offsetX) * k
+    c.offsetY += (ty - c.offsetY) * k
+    c.rotation += (tr - c.rotation) * k
+    c.scale += (ts - c.scale) * k
+    apply()
+    const settled =
+      Math.abs(tx - c.offsetX) < 0.0004 &&
+      Math.abs(ty - c.offsetY) < 0.0004 &&
+      Math.abs(tr - c.rotation) < 0.01 &&
+      Math.abs(ts - c.scale) < 0.001
+    if (settled && !active.current) {
+      rafRef.current = 0
+      return
+    }
+    rafRef.current = requestAnimationFrame(rafTick.current)
+  }, [apply])
+
+  useEffect(() => {
+    rafTick.current = runFrame
+  })
+
+  const ensureLoop = useCallback(() => {
+    if (!rafRef.current) rafRef.current = requestAnimationFrame(rafTick.current)
+  }, [])
+
+  useEffect(() => {
+    if (reduceMotion) return
+    if (window.matchMedia('(pointer: coarse)').matches) return
+
+    const onMove = (e) => {
+      const rect = sectionRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const nx = ((e.clientX - rect.left) / rect.width - 0.5) * 2
+      const ny = ((e.clientY - rect.top) / rect.height - 0.5) * 2
+      tgt.current.offsetX = nx * 0.035
+      tgt.current.offsetY = ny * 0.035
+      tgt.current.rotation = REST.rotation + nx * 1.6
+      tgt.current.scale = REST.scale
+      active.current = true
+      ensureLoop()
+    }
+    const onLeave = () => {
+      active.current = false
+      tgt.current = { ...REST }
+      ensureLoop()
+    }
+    const node = sectionRef.current
+    const shaderNode = shaderRef.current
+    if (node) {
+      node.addEventListener('pointermove', onMove)
+      node.addEventListener('pointerleave', onLeave)
+    }
+    return () => {
+      node?.removeEventListener('pointermove', onMove)
+      node?.removeEventListener('pointerleave', onLeave)
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      rafRef.current = 0
+      cur.current = { ...REST }
+      shaderNode?.paperShaderMount?.setUniforms({ ...REST })
+    }
+  }, [reduceMotion, ensureLoop])
+
+  const hoverLane = (lane) => {
+    setActiveLane(lane)
+    shaderRef.current?.paperShaderMount?.setUniforms({
+      u_colorTint: lane?.color ?? colors.tint,
+    })
+  }
+
+  const leaveLane = () => {
+    setActiveLane(null)
+    shaderRef.current?.paperShaderMount?.setUniforms({ u_colorTint: colors.tint })
+  }
+
+  const { scrollYProgress } = useScroll({
+    target: sectionRef,
+    offset: ['start start', 'end start'],
+  })
+  const glassY = useTransform(scrollYProgress, [0, 1], ['0%', '-18%'])
+  const glassScale = useTransform(scrollYProgress, [0, 1], [1, 1.08])
+  const contentOpacity = useTransform(scrollYProgress, [0, 0.55], [1, 0])
+  const contentY = useTransform(scrollYProgress, [0, 0.55], [0, 44])
+
   return (
-    <section id={id} className="relative flex min-h-screen items-center justify-center overflow-hidden">
-      <LiquidMetal
-        {...liquidMetalPresets[2]}
-        style={{ position: 'fixed', inset: 0, zIndex: -10 }}
+    <section
+      id={id}
+      ref={sectionRef}
+      className="liquid-hero"
+      aria-label="Project X hero"
+    >
+      <div className="liquid-hero__ambient" aria-hidden="true" />
+
+      <motion.div
+        className="liquid-hero__glass"
+        aria-hidden="true"
+        style={reduceMotion ? undefined : { y: glassY, scale: glassScale }}
+      >
+        <LiquidMetal
+          ref={shaderRef}
+          {...liquidMetalPresets[0]}
+          colorBack={colors.back}
+          colorTint={colors.tint}
+          shape="diamond"
+          softness={0.5}
+          repetition={compact ? 1.9 : 1.6}
+          distortion={0.16}
+          contour={0.8}
+          shiftRed={0.35}
+          shiftBlue={-0.35}
+          angle={70}
+          scale={compact ? 0.8 : 0.94}
+          rotation={REST.rotation}
+          fit="contain"
+          speed={reduceMotion ? 0 : 0.45}
+          className="h-full w-full"
+        />
+      </motion.div>
+
+      <motion.div
+        className="liquid-hero__veil"
+        aria-hidden="true"
       />
 
-      <div className="container mx-auto max-w-7xl px-6 lg:px-8">
+      <motion.div
+        className="liquid-hero__body"
+        style={reduceMotion ? undefined : { opacity: contentOpacity, y: contentY }}
+      >
         <motion.div
-          className="space-y-8 text-center"
+          className="liquid-hero__inner"
           variants={containerVariants}
-          initial="hidden"
-          animate="visible"
-          transition={{ duration: 0.8, ease: [0.25, 0.1, 0.25, 1] }}
+          initial={reduceMotion ? false : 'hidden'}
+          animate={reduceMotion ? false : 'visible'}
         >
-          {badge && (
-            <motion.div className="flex justify-center" variants={itemVariants}>
-              <Badge
-                variant="secondary"
-                className="bg-foreground/10 text-foreground border-foreground/20 hover:bg-foreground/20 transition-colors duration-300 backdrop-blur-sm"
-              >
-                {badge}
-              </Badge>
-            </motion.div>
-          )}
-
-          <motion.div className="space-y-6" variants={itemVariants}>
-            <h1 className="text-5xl font-bold leading-tight tracking-tight text-foreground sm:text-6xl lg:text-7xl xl:text-8xl">
-              {title}
-            </h1>
-            <p className="mx-auto max-w-3xl text-xl leading-relaxed text-foreground/90 sm:text-2xl">
-              {subtitle}
-            </p>
+          <motion.div variants={itemVariants}>
+            <p className="liquid-hero__eyebrow">{eyebrow}</p>
           </motion.div>
 
-          <motion.div
-            className="flex flex-col items-center justify-center gap-4 sm:flex-row"
-            variants={buttonVariants}
+          <motion.h1
+            className="liquid-hero__title"
+            variants={itemVariants}
           >
-            <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-              <Button
+            {title}
+          </motion.h1>
+
+          <motion.p className="liquid-hero__lede" variants={itemVariants}>
+            {subtitle}
+          </motion.p>
+
+          <motion.div className="liquid-hero__actions" variants={itemVariants}>
+            {primaryCtaLabel && (
+              <button
+                type="button"
+                className="liquid-hero__cta liquid-hero__cta--primary"
                 onClick={onPrimaryCtaClick}
-                size="lg"
-                className="bg-foreground px-8 py-6 text-lg font-semibold text-background shadow-2xl transition-all duration-300 hover:bg-foreground/90"
               >
                 {primaryCtaLabel}
-              </Button>
-            </motion.div>
-
-            {secondaryCtaLabel && onSecondaryCtaClick && (
-              <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                <Button
-                  onClick={onSecondaryCtaClick}
-                  variant="outline"
-                  size="lg"
-                  className="border-foreground/30 px-8 py-6 text-lg font-semibold text-foreground backdrop-blur-sm transition-all duration-300 hover:border-foreground/50 hover:bg-foreground/10"
-                >
-                  {secondaryCtaLabel}
-                </Button>
-              </motion.div>
+              </button>
+            )}
+            {secondaryCtaLabel && (
+              <button
+                type="button"
+                className="liquid-hero__cta liquid-hero__cta--ghost"
+                onClick={onSecondaryCtaClick}
+              >
+                {secondaryCtaLabel}
+              </button>
             )}
           </motion.div>
 
-          {features.length > 0 && (
-            <motion.div className="pt-12" variants={itemVariants}>
-              <motion.div whileHover={{ y: -4 }} transition={{ duration: 0.3 }}>
-                <Card className="border-foreground/20 bg-foreground/10 shadow-2xl backdrop-blur-md">
-                  <div className="p-8">
-                    <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-                      {features.map((feature, index) => (
-                        <motion.div
-                          key={index}
-                          className="flex items-center justify-center text-center"
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ duration: 0.6, delay: 0.8 + index * 0.1 }}
-                        >
-                          <p className="text-lg font-medium text-foreground/90">{feature}</p>
-                        </motion.div>
-                      ))}
-                    </div>
-                  </div>
-                </Card>
-              </motion.div>
-            </motion.div>
+          {lanes.length > 0 && (
+            <motion.nav
+              className="liquid-hero__lanes"
+              aria-label="Pick a lane"
+              variants={itemVariants}
+            >
+              <span className="liquid-hero__lanes-label">Pick a lane</span>
+              <div className="liquid-hero__lanes-list">
+                {lanes.map((lane) => (
+                  <button
+                    key={lane.key}
+                    type="button"
+                    onMouseEnter={() => hoverLane(lane)}
+                    onMouseLeave={leaveLane}
+                    onFocus={() => hoverLane(lane)}
+                    onBlur={leaveLane}
+                    onClick={() => onSelectLane?.(lane)}
+                    aria-current={activeLane?.key === lane.key ? 'true' : undefined}
+                    className="liquid-hero__lane"
+                  >
+                    {lane.label}
+                  </button>
+                ))}
+              </div>
+            </motion.nav>
           )}
         </motion.div>
-      </div>
+      </motion.div>
+
+      <div className="liquid-hero__fade" aria-hidden="true" />
     </section>
   )
 }
